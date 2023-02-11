@@ -1,35 +1,54 @@
 package com.possible.fileupload.services;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.possible.fileupload.dto.ResponseFile;
 import com.possible.fileupload.exceptions.FileNotFoundException;
 import com.possible.fileupload.exceptions.UserNotFoundException;
+import com.possible.fileupload.model.DalimParam;
 import com.possible.fileupload.model.UploadedFile;
 import com.possible.fileupload.model.Users;
 import com.possible.fileupload.repository.UploadedFileRepository;
 import com.possible.fileupload.repository.UserRepository;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.Resource;
+import org.springframework.core.io.ResourceLoader;
 import org.springframework.core.io.UrlResource;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
+import org.w3c.dom.Document;
+import org.w3c.dom.Element;
+import org.w3c.dom.Node;
+import org.w3c.dom.NodeList;
+import org.xml.sax.InputSource;
+import org.xml.sax.SAXException;
 
-import java.io.File;
-import java.io.IOException;
+import javax.xml.parsers.DocumentBuilder;
+import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
+import java.io.*;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Objects;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 @Service
 @Slf4j
 public class FileUploadServiceImpl implements FileUploadService {
 
-    private File uploadFolderPath = new File("C:\\Users\\olayo\\OneDrive\\Documents\\new_upload" );
-    private Path uploadFolderPath2 = Paths.get("C:\\Users\\olayo\\OneDrive\\Documents\\new_upload\\");
+    @Autowired
+    private ResourceLoader resourceLoader;
+
+    private final String UPLOAD_PATH = "C:\\Users\\olayo\\OneDrive\\Documents\\new_upload";
+
     private final UploadedFileRepository fileRepository;
     private final UserRepository userRepository;
     private final UserService userService;
@@ -46,11 +65,11 @@ public class FileUploadServiceImpl implements FileUploadService {
         String realName = originalName.substring(0, originalName.lastIndexOf("."));
         String fileExt = originalName.substring(originalName.lastIndexOf("."));
         String fileName = realName+"_"+System.currentTimeMillis()+fileExt;
-        File fileWrite = new File(uploadFolderPath, fileName);
+        File fileWrite = new File(UPLOAD_PATH, fileName);
         try {
 
             byte[] fileData = file.getBytes();
-//            Path path = Paths.get(uploadFolderPath + file.getOriginalFilename());
+//            Path path = Paths.get(UPLOAD_PATH + file.getOriginalFilename());
 //            Files.write(path, fileData);
             Files.write(fileWrite.toPath(), fileData);
 
@@ -67,7 +86,7 @@ public class FileUploadServiceImpl implements FileUploadService {
         String realName = Objects.requireNonNull(originalName).substring(0, originalName.lastIndexOf("."));
         String fileExt = originalName.substring(originalName.lastIndexOf("."));
         String fileName = realName+"_"+user.getName()+"-"+System.currentTimeMillis()+fileExt;
-        Path path = Paths.get(uploadFolderPath2+"\\"+fileName);
+        Path path = Paths.get(UPLOAD_PATH+"\\"+fileName);
         try {
 
             byte[] fileData = file.getBytes();
@@ -100,12 +119,11 @@ public class FileUploadServiceImpl implements FileUploadService {
 
     @Override
     public Resource loadFileAsResource(Long userId, String fileName) {
-        Users user = userRepository.findById(userId).orElseThrow(() -> new UserNotFoundException("User not found"));
        for (UploadedFile f : userService.getUser(userId).getUploadedFiles()){
            String storedName = f.getFileName();
            if (storedName.split("_")[0].equalsIgnoreCase(fileName)){
                try {
-                   Path filePath = this.uploadFolderPath2.resolve(storedName);
+                   Path filePath = Paths.get(UPLOAD_PATH).resolve(storedName);
                    Resource resource = new UrlResource(filePath.toUri());
                    if (resource.exists()){
                        return resource;
@@ -120,7 +138,6 @@ public class FileUploadServiceImpl implements FileUploadService {
        }
         return null;
     }
-
 
     @Override
     public ResponseFile uploadFileDb(MultipartFile file) {
@@ -201,4 +218,108 @@ public class FileUploadServiceImpl implements FileUploadService {
     }
 
     */
+
+    @Override //587ms
+    public List<DalimParam> jdfParser(String file) {
+        List<DalimParam> dalimParamList = new ArrayList<>();
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+
+        try {
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.parse(new ClassPathResource(file).getInputStream());
+            doc.getDocumentElement().normalize();
+            NodeList nodeList = doc.getElementsByTagName("Notification");
+            for (int i = 0; i < nodeList.getLength(); i++) {
+                Node node = nodeList.item(i);
+                if (node.getNodeType() == Node.ELEMENT_NODE) {
+                    Element nodeElement = (Element) node;
+
+                    if (nodeElement.getAttribute("Class").equalsIgnoreCase("Information")){
+                       String  nodeContent = nodeElement.getTextContent().split("!!!")[1];
+                        StringBuilder stringBuilder = new StringBuilder(nodeContent);
+                        stringBuilder.deleteCharAt(0);
+                        stringBuilder.deleteCharAt(stringBuilder.length() - 1);
+
+                        ObjectMapper mapper = new ObjectMapper();
+                        DalimParam dalimParam = mapper.readValue(stringBuilder.toString(), DalimParam.class);
+                        dalimParamList.add(dalimParam);
+
+                    }
+                }
+
+            }
+        } catch (ParserConfigurationException | IOException | SAXException e) {
+            log.error("Error: \n{}", e.getMessage());
+            e.printStackTrace();
+        }
+
+        return dalimParamList;
+    }
+
+
+    @Override //436ms
+    public List<DalimParam> readXmlFromLocalFile(String filePath) throws IOException {
+        List<DalimParam> dalimParamList = new ArrayList<>();
+        Resource resource = resourceLoader.getResource(filePath);
+        File file = resource.getFile();
+        try ( BufferedReader reader = new BufferedReader(new FileReader(file))){
+
+            String line;
+            while ((line = reader.readLine()) !=null){
+                if (line.contains("!!!")) {
+                    StringBuilder sb = new StringBuilder();
+                    String lineSplit = line.split("!!!")[1];
+                    sb.append(lineSplit);
+                    sb.deleteCharAt(0);
+                    sb.deleteCharAt(sb.length() - 1);
+                    ObjectMapper mapper = new ObjectMapper();
+                    DalimParam dalimParam = mapper.readValue(sb.toString(), DalimParam.class);
+                    dalimParamList.add(dalimParam);
+                    break;
+                }
+
+            }
+        }
+
+        return dalimParamList;
+    }
+
+    @Override // 818ms
+    public List<DalimParam> readXmlFromLocalFile2(String filePath) {
+        List<DalimParam> dalimParamList = new ArrayList<>();
+
+        try {
+            byte[] xmlFile = Files.readAllBytes(Paths.get(filePath));
+            DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+            DocumentBuilder builder = factory.newDocumentBuilder();
+            Document doc = builder.parse(new ByteArrayInputStream(xmlFile));
+            doc.getDocumentElement().normalize();
+            NodeList nodeList = doc.getElementsByTagName("Notification");
+            for (int i = 0; i < nodeList.getLength(); i++) {
+                Node node = nodeList.item(i);
+                if (node.getNodeType() == Node.ELEMENT_NODE) {
+                    Element nodeElement = (Element) node;
+
+                    if (nodeElement.getAttribute("Class").equalsIgnoreCase("Information")){
+                       String  nodeContent = nodeElement.getTextContent().split("!!!")[1];
+                        StringBuilder stringBuilder = new StringBuilder(nodeContent);
+                        stringBuilder.deleteCharAt(0);
+                        stringBuilder.deleteCharAt(stringBuilder.length() - 1);
+
+                        ObjectMapper mapper = new ObjectMapper();
+                        DalimParam dalimParam = mapper.readValue(stringBuilder.toString(), DalimParam.class);
+                        dalimParamList.add(dalimParam);
+
+                    }
+                }
+
+            }
+        } catch (ParserConfigurationException | IOException | SAXException e) {
+            log.error("Error: \n{}", e.getMessage());
+            e.printStackTrace();
+        }
+
+        return dalimParamList;
+    }
+
 }
